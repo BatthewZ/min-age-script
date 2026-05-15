@@ -17,8 +17,13 @@
     bun       minimumReleaseAge          SECONDS            (bunfig.toml)
     yarn      npmMinimalAgeGate          DURATION STRING    (yarn >= 4.10)
     uv        exclude-newer              DURATION STRING    (uv.toml)
-    composer  minimum-release-age        DURATION STRING    (composer 2.9+)
     cargo     cooldown_minutes           MINUTES            (cargo-cooldown, 3rd-party)
+
+  composer (PHP) is intentionally NOT handled. `minimum-release-age` is still
+  an unmerged, actively-iterated PR (composer/composer#12692, targets 2.11);
+  writing a config that may not match the final shape would silently leave
+  users believing they're protected when they're not. We'll add it back when
+  2.11 ships and the schema is locked.
 
   The script is idempotent: re-running it just rewrites the same values.
 
@@ -91,7 +96,8 @@ function Show-Usage {
 Usage: .\set-minimum-release-age.ps1 [options]
 
 Configures a "minimum release age" cooldown across npm, pnpm, bun, yarn,
-uv (Python), composer (PHP), and cargo (Rust, via cargo-cooldown).
+uv (Python), and cargo (Rust, via cargo-cooldown). Composer (PHP) is
+intentionally not handled yet -- see the README for why.
 
 Options:
   -Days N             Cooldown length in days (default: 7).
@@ -189,8 +195,7 @@ $UvToml          = Join-Path $UvConfigDir  'uv.toml'
 $CargoCooldown   = Join-Path $Home_        '.cargo\cooldown.toml'
 
 # Files this script may create, edit, or back up. Used by the end-of-run
-# -KeepBackups pruner. Composer's config.json is appended later, once we've
-# asked composer where its global home lives.
+# -KeepBackups pruner.
 $script:ManagedFiles = New-Object System.Collections.Generic.List[string]
 $script:ManagedFiles.Add($NpmRc)         | Out-Null
 $script:ManagedFiles.Add($PnpmRcDefault) | Out-Null
@@ -337,23 +342,6 @@ function Prune-Backups {
   }
 }
 
-# Ask composer where its global config dir lives and back up config.json
-# before the CLI mutates it. Also adds the path to ManagedFiles so
-# -KeepBackups picks it up.
-function Backup-ComposerConfig {
-  if (-not (Have 'composer')) { return }
-  $cc_home = $null
-  try {
-    $cc_home = (& composer config --global home 2>$null | Out-String).Trim()
-  } catch {}
-  if (-not $cc_home) { return }
-  $cc_config = Join-Path $cc_home 'config.json'
-  if (-not ($script:ManagedFiles -contains $cc_config)) {
-    $script:ManagedFiles.Add($cc_config) | Out-Null
-  }
-  Backup-File $cc_config
-}
-
 # ---- preamble & confirmation ---------------------------------------------
 if     ($Revert) { $ActionLabel = 'REVERT (remove) the' }
 elseif ($DryRun) { $ActionLabel = 'PREVIEW a' }
@@ -363,7 +351,8 @@ if (-not $Quiet) {
 @"
 
 This script will $ActionLabel $Days-day "minimum release age" cooldown across:
-  npm, pnpm, bun, yarn, uv (Python), composer (PHP), and cargo (via cargo-cooldown).
+  npm, pnpm, bun, yarn, uv (Python), and cargo (via cargo-cooldown).
+  (Composer / PHP is intentionally not handled yet -- see the README.)
 
 What this means in practice:
   * Installs will refuse versions younger than $Days days from upstream.
@@ -379,7 +368,6 @@ Files that may be created or edited:
   $BunFig
   $YarnRc
   $UvToml
-  Composer global config.json (via ``composer global config``)
   $CargoCooldown
 
 "@ | Write-Host
@@ -684,51 +672,15 @@ Skip "pip has no native cooldown setting -- use ``uv pip`` (configured above)"
 Skip "or pin with hashes / use a mirror that delays publication."
 
 # ===========================================================================
-# composer (PHP)  --  global config.json, duration string
+# composer (PHP) is intentionally NOT configured.
+#
+# `minimum-release-age` is implemented in an open, actively-iterated PR
+# (composer/composer#12692) targeting the unreleased Composer 2.11. The
+# schema (nested object vs flat string, key names, duration format, env-var
+# name) could shift before merge -- and silently writing the wrong shape in
+# a security script is strictly worse than writing nothing. We'll add this
+# block back once 2.11 ships and the schema is locked.
 # ===========================================================================
-Hdr 'composer'
-# Composer doesn't read unknown keys gracefully if hand-written, and its
-# config.json wants real JSON, so we *must* go through the CLI when present.
-if ($Revert) {
-  if (Have 'composer') {
-    Backup-ComposerConfig
-    if ($DryRun) {
-      Note "[dry-run] would run: composer global config --unset minimum-release-age.minimum-age"
-    } else {
-      try { & composer global config --unset minimum-release-age.minimum-age *>$null } catch {}
-    }
-    Ok "composer: removed minimum-release-age.minimum-age (if it was set)"
-  } else {
-    Skip "composer not installed; nothing to revert"
-  }
-} elseif (-not (Should-Configure 'composer')) {
-  Skip "composer not installed; skipped. Pass -IncludeAbsent to write config anyway"
-} else {
-  if (Have 'composer') {
-    $composerVer = try {
-      ((& composer --version 2>$null) | Select-Object -First 1).Trim()
-    } catch { 'composer' }
-    Backup-ComposerConfig
-    if ($DryRun) {
-      Note "[dry-run] would run: composer global config minimum-release-age.minimum-age `"$DurationHuman`""
-      Ok "${composerVer}: would set minimum-release-age.minimum-age=`"$DurationHuman`""
-    } else {
-      $applied = $false
-      try {
-        & composer global config minimum-release-age.minimum-age $DurationHuman *>$null
-        if ($LASTEXITCODE -eq 0) { $applied = $true }
-      } catch {}
-      if ($applied) {
-        Ok "composer: minimum-release-age.minimum-age=`"$DurationHuman`" (global config.json)"
-      } else {
-        Skip "$composerVer rejected the key -- upgrade to a Composer that supports minimum-release-age"
-        Skip "fallback for now: set the COMPOSER_MINIMUM_RELEASE_AGE environment variable to `"$DurationHuman`""
-      }
-    }
-  } else {
-    Skip "composer not installed; set COMPOSER_MINIMUM_RELEASE_AGE=`"$DurationHuman`" when you do"
-  }
-}
 
 # ===========================================================================
 # cargo (Rust)  --  no native setting yet (RFC #3923 in progress).

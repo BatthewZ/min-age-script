@@ -17,8 +17,13 @@
 #   bun       minimumReleaseAge          SECONDS            (bunfig.toml)
 #   yarn      npmMinimalAgeGate          DURATION STRING    (yarn >= 4.10)
 #   uv        exclude-newer              DURATION STRING    (uv.toml)
-#   composer  minimum-release-age        DURATION STRING    (composer 2.9+)
 #   cargo     cooldown_minutes           MINUTES            (cargo-cooldown, 3rd-party)
+#
+# composer (PHP) is intentionally NOT handled. `minimum-release-age` is still
+# an unmerged, actively-iterated PR (composer/composer#12692, targets 2.11);
+# writing a config that may not match the final shape would silently leave
+# users believing they're protected when they're not. We'll add it back when
+# 2.11 ships and the schema is locked.
 #
 # The script is idempotent: re-running it just rewrites the same values.
 #
@@ -52,7 +57,8 @@ usage() {
 Usage: $0 [options]
 
 Configures a "minimum release age" cooldown across npm, pnpm, bun, yarn,
-uv (Python), composer (PHP), and cargo (Rust, via cargo-cooldown).
+uv (Python), and cargo (Rust, via cargo-cooldown). Composer (PHP) is
+intentionally not handled yet -- see the README for why.
 
 Options:
   --days=N         Cooldown length in days (default: 7).
@@ -204,8 +210,7 @@ upsert_line() {
 }
 
 # Files that this script may create, edit, or back up. Used by the
-# end-of-run --keep-backups pruner. Composer's config.json is appended
-# later, once we've asked composer where its global home lives.
+# end-of-run --keep-backups pruner.
 MANAGED_FILES=(
   "$HOME/.npmrc"
   "$PNPM_RC_DEFAULT"
@@ -220,10 +225,11 @@ MANAGED_FILES=(
 #
 # We sort by the YYYYMMDD-HHMMSS suffix in the filename rather than by file
 # mtime: `cp -p` preserves the source's mtime, so if a config was never
-# actually modified between runs (e.g. composer rejecting the key), every
-# backup inherits the same mtime and `ls -t` falls back to alphabetical
-# which inverts the intended order. Filename suffixes are guaranteed unique
-# per run, and YYYYMMDD-HHMMSS sorts lexicographically == chronologically.
+# actually modified between runs (e.g. an older package manager rejecting
+# the key, leaving the file untouched), every backup inherits the same
+# mtime and `ls -t` falls back to alphabetical which inverts the intended
+# order. Filename suffixes are guaranteed unique per run, and YYYYMMDD-HHMMSS
+# sorts lexicographically == chronologically.
 prune_backups() {
   [ "$KEEP_BACKUPS" -lt 0 ] && return 0
   local f dir base count bak
@@ -253,19 +259,6 @@ prune_backups() {
     done < <(printf '%s\n' "${files[@]}" | sort -r)
   done
   [ "$nullglob_was_set" -eq 0 ] && shopt -u nullglob
-}
-
-# Ask composer where its global config dir lives and back up config.json
-# before the CLI mutates it. Also adds the path to MANAGED_FILES so
-# --keep-backups picks it up.
-backup_composer_config() {
-  have composer || return 0
-  local cc_home cc_config
-  cc_home=$(composer config --global home 2>/dev/null | tr -d '\r' || echo "")
-  [ -n "$cc_home" ] || return 0
-  cc_config="$cc_home/config.json"
-  MANAGED_FILES+=("$cc_config")
-  backup_file "$cc_config"
 }
 
 # Remove every line matching <regex> from <file>. Used by --revert.
@@ -299,7 +292,8 @@ if [ "$QUIET" -eq 0 ]; then
   cat <<EOF
 
 This script will ${ACTION_LABEL} ${DAYS}-day "minimum release age" cooldown across:
-  npm, pnpm, bun, yarn, uv (Python), composer (PHP), and cargo (via cargo-cooldown).
+  npm, pnpm, bun, yarn, uv (Python), and cargo (via cargo-cooldown).
+  (Composer / PHP is intentionally not handled yet — see the README.)
 
 What this means in practice:
   • Installs will refuse versions younger than ${DAYS} days from upstream.
@@ -315,7 +309,6 @@ Files that may be created or edited:
   ~/.bunfig.toml
   ~/.yarnrc.yml
   ${UV_CONFIG_DIR_DEFAULT}/uv.toml
-  Composer global config.json (via \`composer global config\`)
   ~/.cargo/cooldown.toml
 
 EOF
@@ -615,44 +608,15 @@ skip "pip has no native cooldown setting — use \`uv pip\` (configured above)"
 skip "or pin with hashes / use a mirror that delays publication."
 
 # ===========================================================================
-# composer (PHP)  --  global config.json, duration string
+# composer (PHP) is intentionally NOT configured.
+#
+# `minimum-release-age` is implemented in an open, actively-iterated PR
+# (composer/composer#12692) targeting the unreleased Composer 2.11. The
+# schema (nested object vs flat string, key names, duration format, env-var
+# name) could shift before merge -- and silently writing the wrong shape in
+# a security script is strictly worse than writing nothing. We'll add this
+# block back once 2.11 ships and the schema is locked.
 # ===========================================================================
-hdr "composer"
-# Composer doesn't read unknown keys gracefully if hand-written, and its
-# config.json wants real JSON, so we *must* go through the CLI when present.
-if [ "$REVERT" -eq 1 ]; then
-  if have composer; then
-    backup_composer_config
-    if [ "$DRY_RUN" -eq 1 ]; then
-      note "[dry-run] would run: composer global config --unset minimum-release-age.minimum-age"
-    else
-      composer global config --unset minimum-release-age.minimum-age >/dev/null 2>&1 || true
-    fi
-    ok "composer: removed minimum-release-age.minimum-age (if it was set)"
-  else
-    skip "composer not installed; nothing to revert"
-  fi
-elif ! should_configure composer; then
-  skip "composer not installed; skipped. Pass --include-absent to write config anyway"
-else
-  if have composer; then
-    composer_ver=$(composer --version 2>/dev/null | head -n1 || echo "composer")
-    # Back up composer's global config.json before the CLI mutates it, so
-    # there's something to roll back to if anything goes wrong.
-    backup_composer_config
-    if [ "$DRY_RUN" -eq 1 ]; then
-      note "[dry-run] would run: composer global config minimum-release-age.minimum-age \"$DURATION_HUMAN\""
-      ok "${composer_ver}: would set minimum-release-age.minimum-age=\"${DURATION_HUMAN}\""
-    elif composer global config minimum-release-age.minimum-age "$DURATION_HUMAN" >/dev/null 2>&1; then
-      ok "composer: minimum-release-age.minimum-age=\"${DURATION_HUMAN}\" (global config.json)"
-    else
-      skip "${composer_ver} rejected the key — upgrade to a Composer that supports minimum-release-age"
-      skip "fallback for now: export COMPOSER_MINIMUM_RELEASE_AGE=\"${DURATION_HUMAN}\" in your shell rc"
-    fi
-  else
-    skip "composer not installed; set COMPOSER_MINIMUM_RELEASE_AGE=\"${DURATION_HUMAN}\" when you do"
-  fi
-fi
 
 # ===========================================================================
 # cargo (Rust)  --  no native setting yet (RFC #3923 in progress).

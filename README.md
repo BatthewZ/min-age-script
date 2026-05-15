@@ -1,6 +1,8 @@
 # set-minimum-release-age
 
-A pair of cross-platform scripts that turn on **"minimum release age"** (a.k.a. install cooldown) globally across the package managers you probably already use: **npm, pnpm, bun, yarn, uv (Python), composer (PHP)** and **cargo (Rust, via cargo-cooldown)**.
+A pair of cross-platform scripts that turn on **"minimum release age"** (a.k.a. install cooldown) globally across the package managers you probably already use: **npm, pnpm, bun, yarn, uv (Python)** and **cargo (Rust, via cargo-cooldown)**.
+
+(**Composer (PHP)** is deliberately not configured by this script — see [What it does *not* do](#what-it-does-not-do).)
 
 - [`set-minimum-release-age.sh`](set-minimum-release-age.sh) — Bash, for **macOS and Linux**.
 - [`set-minimum-release-age.ps1`](set-minimum-release-age.ps1) — PowerShell, for **Windows** (Windows PowerShell 5.1+ or PowerShell 7+).
@@ -24,10 +26,10 @@ This script applies that setting in every place it can, all at once, so you don'
 
 ## What it does
 
-- Writes a `min-release-age` / `minimumReleaseAge` / `exclude-newer` / `npmMinimalAgeGate` / `minimum-release-age` / `cooldown_minutes` setting into the appropriate global config file for each ecosystem.
-- Converts your chosen number of days into whatever unit that ecosystem expects (npm wants days, pnpm wants minutes, bun wants seconds, yarn/uv/composer want duration strings, cargo-cooldown wants minutes).
-- Prefers each tool's own CLI (`pnpm config set -g`, `yarn config set -H`, `composer global config`) when available, and falls back to direct file edits when not.
-- Backs up every file it touches to `<path>.bak.<timestamp>` before editing — including Composer's global `config.json`, which the script reaches through `composer config --global home`.
+- Writes a `min-release-age` / `minimumReleaseAge` / `exclude-newer` / `npmMinimalAgeGate` / `cooldown_minutes` setting into the appropriate global config file for each ecosystem.
+- Converts your chosen number of days into whatever unit that ecosystem expects (npm wants days, pnpm wants minutes, bun wants seconds, yarn/uv want duration strings, cargo-cooldown wants minutes).
+- Prefers each tool's own CLI (`pnpm config set -g`, `yarn config set -H`) when available, and falls back to direct file edits when not.
+- Backs up every file it touches to `<path>.bak.<timestamp>` before editing.
 - Is **idempotent** — re-running it just rewrites the same values, it won't duplicate lines.
 - Knows the OS-specific config paths for pnpm and uv across macOS, Linux, and Windows.
 - By default, **only configures ecosystems whose package manager is actually installed** — it won't litter your home dir with configs for tools you don't use. Pass `--include-absent` to also pre-seed configs for absent tools so they're protected the moment you install them.
@@ -43,7 +45,6 @@ The files it may create or modify:
 ~/.bunfig.toml
 ~/.yarnrc.yml
 ~/.config/uv/uv.toml       (macOS: ~/Library/Application Support/uv/uv.toml)
-Composer global config.json (via `composer global config`)
 ~/.cargo/cooldown.toml
 ```
 
@@ -55,7 +56,6 @@ Composer global config.json (via `composer global config`)
 %USERPROFILE%\.bunfig.toml
 %USERPROFILE%\.yarnrc.yml
 %APPDATA%\uv\uv.toml
-Composer global config.json (via `composer global config`)
 %USERPROFILE%\.cargo\cooldown.toml
 ```
 
@@ -71,6 +71,7 @@ Composer global config.json (via `composer global config`)
 - It doesn't install `cargo-cooldown` itself (the third-party runner that consumes `~/.cargo/cooldown.toml`). Native cargo support is still RFC-stage.
 - It doesn't configure **pip** — pip has no equivalent setting. Use `uv pip` (which this script configures) or pin with hashes.
 - It doesn't affect existing lockfiles. Things you've already installed stay installed.
+- It deliberately **does not configure composer (PHP).** `minimum-release-age` is not in any released Composer — it lives in [an open PR](https://github.com/composer/composer/pull/12692) targeting Composer 2.11, with zero formal reviews and an active iteration window. In a security script, writing config that *might* turn out to be the wrong shape is strictly worse than writing none — silently mis-configuring leaves users believing they're protected when they're not. The composer block will be added back once 2.11 ships and the schema is locked. Until then, the only PHP-side mitigation is to lock dependencies aggressively, audit your `composer.lock`, and watch the linked PR.
 
 ## Flags
 
@@ -205,7 +206,7 @@ Each ecosystem's cooldown key landed in a specific release:
 - bun `minimumReleaseAge` — recent bun
 - yarn `npmMinimalAgeGate` — Yarn Berry ≥ **4.10**
 - uv `exclude-newer` — current uv
-- composer `minimum-release-age` — Composer ≥ **2.9**
 - cargo — no native support yet (RFC #3923); uses third-party `cargo-cooldown`
+- composer — *deliberately not handled by this script today*; see [What it does *not* do](#what-it-does-not-do).
 
 The script writes the config regardless of the installed version. Older tools will silently ignore an unknown key, and the protection will kick in the moment you upgrade.
