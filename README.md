@@ -1,6 +1,11 @@
 # set-minimum-release-age
 
-A single Bash script that turns on **"minimum release age"** (a.k.a. install cooldown) globally across the package managers you probably already use: **npm, pnpm, bun, yarn, uv (Python), composer (PHP)** and **cargo (Rust, via cargo-cooldown)**.
+A pair of cross-platform scripts that turn on **"minimum release age"** (a.k.a. install cooldown) globally across the package managers you probably already use: **npm, pnpm, bun, yarn, uv (Python), composer (PHP)** and **cargo (Rust, via cargo-cooldown)**.
+
+- [`set-minimum-release-age.sh`](set-minimum-release-age.sh) — Bash, for **macOS and Linux**.
+- [`set-minimum-release-age.ps1`](set-minimum-release-age.ps1) — PowerShell, for **Windows** (Windows PowerShell 5.1+ or PowerShell 7+).
+
+Both scripts do the same thing and accept the same options, with platform-idiomatic flag spellings (`--days=7` on the shell side, `-Days 7` on the PowerShell side).
 
 ## Why
 
@@ -24,11 +29,13 @@ This script applies that setting in every place it can, all at once, so you don'
 - Prefers each tool's own CLI (`pnpm config set -g`, `yarn config set -H`, `composer global config`) when available, and falls back to direct file edits when not.
 - Backs up every file it touches to `<path>.bak.<timestamp>` before editing — including Composer's global `config.json`, which the script reaches through `composer config --global home`.
 - Is **idempotent** — re-running it just rewrites the same values, it won't duplicate lines.
-- Knows the OS-specific config paths for pnpm and uv on macOS vs Linux.
+- Knows the OS-specific config paths for pnpm and uv across macOS, Linux, and Windows.
 - By default, **only configures ecosystems whose package manager is actually installed** — it won't litter your home dir with configs for tools you don't use. Pass `--include-absent` to also pre-seed configs for absent tools so they're protected the moment you install them.
 - Refuses to proceed if stdin isn't a terminal (e.g. `curl … | bash`) unless you pass `--yes`. A security-themed script shouldn't apply changes without explicit consent.
 
 The files it may create or modify:
+
+**macOS / Linux:**
 
 ```
 ~/.npmrc
@@ -38,6 +45,18 @@ The files it may create or modify:
 ~/.config/uv/uv.toml       (macOS: ~/Library/Application Support/uv/uv.toml)
 Composer global config.json (via `composer global config`)
 ~/.cargo/cooldown.toml
+```
+
+**Windows:**
+
+```
+%USERPROFILE%\.npmrc
+%LOCALAPPDATA%\pnpm\config\rc
+%USERPROFILE%\.bunfig.toml
+%USERPROFILE%\.yarnrc.yml
+%APPDATA%\uv\uv.toml
+Composer global config.json (via `composer global config`)
+%USERPROFILE%\.cargo\cooldown.toml
 ```
 
 ## What it does *not* do
@@ -55,21 +74,23 @@ Composer global config.json (via `composer global config`)
 
 ## Flags
 
-| Flag | What it does |
-| --- | --- |
-| `--days=N` | Cooldown length in days. Default: `7`. |
-| `--dry-run` | Show exactly what would change — files, lines, CLI calls — without writing anything. |
-| `--revert` | Remove the settings this script previously wrote, in every ecosystem. Safe to run even if some tools have been uninstalled since (revert ignores `--include-absent` and always checks every ecosystem). |
-| `--include-absent` | Also configure ecosystems whose package manager *isn't* installed yet, so they're protected once it is. Default is to skip absent tools. |
-| `--no-backup` | Skip the `.bak.<timestamp>` copies. Not recommended unless you know what you're doing. |
-| `--keep-backups=N` | Keep only the N most recent `.bak.<timestamp>` files per managed config; older ones are pruned at the end of the run. Default: keep all. `--keep-backups=0` deletes every backup once the apply/revert completes. |
-| `-y`, `--yes` | Skip the "Proceed? [y/N]" prompt. **Required** when stdin isn't a terminal (e.g. piping into bash) — the script refuses to auto-apply silently. |
-| `--quiet` | Suppress the informational output. Errors still print. |
-| `-h`, `--help` | Show usage and exit. |
+| Bash flag | PowerShell flag | What it does |
+| --- | --- | --- |
+| `--days=N` | `-Days N` | Cooldown length in days. Default: `7`. |
+| `--dry-run` | `-DryRun` | Show exactly what would change — files, lines, CLI calls — without writing anything. |
+| `--revert` | `-Revert` | Remove the settings this script previously wrote, in every ecosystem. Safe to run even if some tools have been uninstalled since (revert ignores `--include-absent` and always checks every ecosystem). |
+| `--include-absent` | `-IncludeAbsent` | Also configure ecosystems whose package manager *isn't* installed yet, so they're protected once it is. Default is to skip absent tools. |
+| `--no-backup` | `-NoBackup` | Skip the `.bak.<timestamp>` copies. Not recommended unless you know what you're doing. |
+| `--keep-backups=N` | `-KeepBackups N` | Keep only the N most recent `.bak.<timestamp>` files per managed config; older ones are pruned at the end of the run. Default: keep all. Use `0` to delete every backup once the apply/revert completes. |
+| `-y`, `--yes` | `-Yes` (`-y`) | Skip the "Proceed? [y/N]" prompt. **Required** when stdin isn't a terminal (e.g. piping into bash, or running headlessly) — the script refuses to auto-apply silently. |
+| `--quiet` | `-Quiet` | Suppress the informational output. Errors still print. |
+| `-h`, `--help` | `-Help` (`-h`) | Show usage and exit. |
 
 A non-zero exit from one ecosystem will not stop the others — every tool is configured best-effort.
 
 ## Examples
+
+### macOS / Linux
 
 **Preview first** (always a good idea):
 
@@ -113,7 +134,48 @@ A non-zero exit from one ecosystem will not stop the others — every tool is co
 ./set-minimum-release-age.sh --keep-backups=3
 ```
 
-**Bypass the cooldown for one urgent install** (these are per-tool, not this script):
+### Windows (PowerShell)
+
+The same operations on Windows. Run from any PowerShell prompt (Windows PowerShell 5.1 or PowerShell 7+):
+
+```powershell
+# Preview
+.\set-minimum-release-age.ps1 -DryRun
+
+# Apply with the default 7-day cooldown
+.\set-minimum-release-age.ps1
+
+# Headless / unattended (skips the prompt)
+.\set-minimum-release-age.ps1 -Yes -Quiet
+
+# 14-day cooldown
+.\set-minimum-release-age.ps1 -Days 14
+
+# Pre-seed configs for tools you haven't installed yet
+.\set-minimum-release-age.ps1 -IncludeAbsent
+
+# Roll it all back
+.\set-minimum-release-age.ps1 -Revert
+
+# Keep only the 3 most recent .bak.* files per managed config
+.\set-minimum-release-age.ps1 -KeepBackups 3
+```
+
+If PowerShell refuses to run the script with *"… cannot be loaded because running scripts is disabled on this system"*, either set the policy for your user once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+…or invoke it ad-hoc without changing any policy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\set-minimum-release-age.ps1
+```
+
+### Bypassing the cooldown for one urgent install
+
+(These are per-tool flags, not options of this script.)
 
 ```bash
 npm install some-pkg --ignore-min-release-age
@@ -123,9 +185,16 @@ uv add some-pkg --exclude-newer=now
 
 ## Requirements
 
+**macOS / Linux (`set-minimum-release-age.sh`):**
+
 - Bash.
 - `awk`, `grep`, `cp`, `mv`, `mkdir`, `date` — standard on macOS and Linux.
 - `python3` is used for the bun TOML edit if present; the script falls back to `awk` if not.
+
+**Windows (`set-minimum-release-age.ps1`):**
+
+- Windows PowerShell 5.1 (ships with Windows 10/11) or PowerShell 7+.
+- No external dependencies — the script does the bun TOML edit in pure PowerShell, so Python is not required.
 
 ## A note on versions
 
